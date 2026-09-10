@@ -104,12 +104,12 @@ class RykerAdminActionView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
 
-            new_content = "🚨 惡意用戶已自動禁言 3 天（管理員已處理）"
+            new_content = "🚨 用戶已自動禁言 3 天（管理員已處理）"
             if interaction.message and interaction.message.content:
                 if "等待管理員處理" in interaction.message.content:
                     new_content = interaction.message.content.replace("等待管理員處理", "管理員已處理")
                 elif "1 小時" in interaction.message.content:
-                    new_content = "🚨 惡意用戶已自動禁言 1 小時（管理員已處理）"
+                    new_content = "🚨 用戶已自動禁言 1 小時（管理員已處理）"
             await interaction.response.edit_message(content=new_content, view=self)
             
             sync_msg = ""
@@ -192,12 +192,12 @@ class RykerAdminActionView(discord.ui.View):
                 for item in self.children:
                     item.disabled = True
 
-                new_content = "🚨 惡意用戶已自動禁言 3 天（管理員已處理）"
+                new_content = "🚨 用戶已自動禁言 3 天（管理員已處理）"
                 if interaction.message and interaction.message.content:
                     if "等待管理員處理" in interaction.message.content:
                         new_content = interaction.message.content.replace("等待管理員處理", "管理員已處理")
                     elif "1 小時" in interaction.message.content:
-                        new_content = "🚨 惡意用戶已自動禁言 1 小時（管理員已處理）"
+                        new_content = "🚨 用戶已自動禁言 1 小時（管理員已處理）"
                 await interaction.response.edit_message(content=new_content, view=self)
 
                 await interaction.followup.send(
@@ -246,12 +246,12 @@ class RykerAdminActionView(discord.ui.View):
                 for item in self.children:
                     item.disabled = True
 
-                new_content = "🚨 惡意用戶已自動禁言 3 天（管理員已處理）"
+                new_content = "🚨 用戶已自動禁言 3 天（管理員已處理）"
                 if interaction.message and interaction.message.content:
                     if "等待管理員處理" in interaction.message.content:
                         new_content = interaction.message.content.replace("等待管理員處理", "管理員已處理")
                     elif "1 小時" in interaction.message.content:
-                        new_content = "🚨 惡意用戶已自動禁言 1 小時（管理員已處理）"
+                        new_content = "🚨 用戶已自動禁言 1 小時（管理員已處理）"
                 await interaction.response.edit_message(content=new_content, view=self)
 
                 await interaction.followup.send(
@@ -747,7 +747,7 @@ class RykerDefenseCog(commands.Cog):
             embed.set_thumbnail(url=author.display_avatar.url)
             embed.set_footer(text="TWERG HoneyBot 防護系統")
             await channel.send(
-                content="🚨 惡意用戶已自動禁言 3 天（等待管理員處理）",
+                content="🚨 用戶已自動禁言 3 天（等待管理員處理）",
                 embed=embed,
                 view=RykerAdminActionView(author)
             )
@@ -771,7 +771,7 @@ class RykerDefenseCog(commands.Cog):
                     console_channel = self.bot.get_channel(int(console_id))
                     if console_channel and console_channel.id != channel.id:
                         await console_channel.send(
-                            content="🚨 惡意用戶已自動禁言 3 天（等待管理員處理）",
+                            content="🚨 用戶已自動禁言 3 天（等待管理員處理）",
                             embed=embed,
                             view=RykerAdminActionView(author)
                         )
@@ -795,7 +795,7 @@ class RykerDefenseCog(commands.Cog):
             embed.set_thumbnail(url=author.display_avatar.url)
             embed.set_footer(text="TWERG HoneyBot 防護系統")
             await channel.send(
-                content="🚨 惡意用戶已自動禁言 1 小時（等待管理員處理）",
+                content="🚨 用戶已自動禁言 1 小時（等待管理員處理）",
                 embed=embed,
                 view=RykerAdminActionView(author)
             )
@@ -820,7 +820,7 @@ class RykerDefenseCog(commands.Cog):
                         console_channel = self.bot.get_channel(int(console_id))
                         if console_channel and console_channel.id != channel.id:
                             await console_channel.send(
-                                content="🚨 惡意用戶已自動禁言 1 小時（等待管理員處理）",
+                                content="🚨 用戶已自動禁言 1 小時（等待管理員處理）",
                                 embed=embed,
                                 view=RykerAdminActionView(author)
                             )
