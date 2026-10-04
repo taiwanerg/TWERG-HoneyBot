@@ -412,6 +412,37 @@ class RykerDefenseCog(commands.Cog):
                 explicit_mentions.append(user)
         return explicit_mentions
 
+    async def _get_ban_protection_reason(self, guild: discord.Guild, user_id: int) -> str | None:
+        """若目標是機器人無法封鎖的伺服器成員，回傳原因；不在伺服器內則可預先封鎖。"""
+        bot_member = guild.get_member(self.bot.user.id)
+        if bot_member is None:
+            try:
+                bot_member = await guild.fetch_member(self.bot.user.id)
+            except discord.HTTPException:
+                return "無法取得機器人成員資料"
+
+        if not bot_member.guild_permissions.ban_members:
+            return "機器人缺少「封鎖成員」權限"
+
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except discord.NotFound:
+                return None
+            except discord.HTTPException:
+                return "無法驗證目標成員的權限"
+
+        if member.id == guild.owner_id:
+            return "目標是伺服器擁有者"
+        if member.id == bot_member.id:
+            return "目標是機器人本身"
+        if member.guild_permissions.administrator:
+            return "目標擁有管理員權限"
+        if bot_member.top_role <= member.top_role:
+            return "目標的身分組順位高於或等於機器人"
+        return None
+
     def _migrate_legacy_dbs(self):
         """若存在舊版資料庫 (fkfeboy_counts.db, ryker_targets.db, ryker_counts.db)，將數據遷移至新版 SQLite 資料庫"""
         # 1. 舊版 ryker_targets.db -> ryker_badusers.db
@@ -1087,7 +1118,7 @@ class RykerDefenseCog(commands.Cog):
             await interaction.response.send_message("❌ 你不是「信任的人」，沒有權限手動發動跨伺服器聯防封鎖！", ephemeral=True)
             return
 
-        parsed_ids = [int(x) for x in re.findall(r'\d{16,20}', user_id or "")]
+        parsed_ids = list(dict.fromkeys(int(x) for x in re.findall(r'\d{16,20}', user_id or "")))
         if not parsed_ids:
             await interaction.response.send_message("❌ 請提供至少一個正確的數字用戶 ID (16~20 位數字)。", ephemeral=True)
             return
@@ -1099,39 +1130,56 @@ class RykerDefenseCog(commands.Cog):
 
         results = []
         for uid in parsed_ids:
-            # 1. 自動寫入 bad_users 黑名單庫並剝奪歷史畢業紀錄
-            self.add_bad_user(uid, added_by_str)
-
             banned_guilds = []
             failed_guilds = []
 
-            for g in self.bot.guilds:
-                if not is_server_authorized(g.id):
-                    continue
-                g_sync = all_settings.get(str(g.id), {}).get("sync_ban", False)
-                if not g_sync:
-                    continue
+            sync_guilds = [
+                g for g in self.bot.guilds
+                if is_server_authorized(g.id)
+                and all_settings.get(str(g.id), {}).get("sync_ban", False)
+            ]
 
-                b_member = g.get_member(self.bot.user.id)
-                if b_member and b_member.guild_permissions.ban_members:
-                    try:
-                        await g.ban(discord.Object(id=uid), reason=f"{reason} (發動者: {interaction.user})")
-                        banned_guilds.append(g.name)
+            # 先檢查當前伺服器與所有聯防伺服器。只要目標在其中任一處受到
+            # 管理員或身分組階層保護，就不執行任何封鎖，也不寫入全域黑名單。
+            guilds_to_check = list(sync_guilds)
+            if interaction.guild and all(g.id != interaction.guild.id for g in guilds_to_check):
+                guilds_to_check.append(interaction.guild)
 
-                        embed_log = discord.Embed(
-                            description=(
-                                f"🤝 **[擁有者手動聯防] 同步預先封鎖**\n\n"
-                                f"• **發動管理員**：{interaction.user.mention} (`{interaction.user.id}`)\n"
-                                f"• **封鎖對象**：<@{uid}> (`{uid}`)\n"
-                                f"• **封鎖原因**：{reason}\n"
-                                f"• **狀態**：本伺服器已成功執行預先封鎖"
-                            ),
-                            color=discord.Color.dark_red()
-                        )
-                        embed_log.set_footer(text="TWERG HoneyBot - 手動聯防日誌")
-                        await send_server_log(g, embed_log)
-                    except Exception as e:
-                        failed_guilds.append(f"{g.name} ({e})")
+            protected_reasons = []
+            for g in guilds_to_check:
+                protection_reason = await self._get_ban_protection_reason(g, uid)
+                if protection_reason:
+                    protected_reasons.append(f"{g.name}: {protection_reason}")
+
+            if protected_reasons:
+                results.append(
+                    f"• **<@{uid}> (`{uid}`)**：\n"
+                    f"  - ⛔ 已取消封鎖，且未寫入惡意帳號庫：{'; '.join(protected_reasons)}"
+                )
+                continue
+
+            for g in sync_guilds:
+                try:
+                    await g.ban(discord.Object(id=uid), reason=f"{reason} (發動者: {interaction.user})")
+                    banned_guilds.append(g.name)
+
+                    embed_log = discord.Embed(
+                        description=(
+                            f"🤝 **[擁有者手動聯防] 同步預先封鎖**\n\n"
+                            f"• **發動管理員**：{interaction.user.mention} (`{interaction.user.id}`)\n"
+                            f"• **封鎖對象**：<@{uid}> (`{uid}`)\n"
+                            f"• **封鎖原因**：{reason}\n"
+                            f"• **狀態**：本伺服器已成功執行預先封鎖"
+                        ),
+                        color=discord.Color.dark_red()
+                    )
+                    embed_log.set_footer(text="TWERG HoneyBot - 手動聯防日誌")
+                    await send_server_log(g, embed_log)
+                except Exception as e:
+                    failed_guilds.append(f"{g.name} ({e})")
+
+            # 只有 Discord 實際封鎖成功後才寫入 DB，避免失敗的 ID 污染全域黑名單。
+            db_added = bool(banned_guilds) and self.add_bad_user(uid, added_by_str)
 
             res_str = f"• **<@{uid}> (`{uid}`)**："
             if banned_guilds:
@@ -1140,6 +1188,12 @@ class RykerDefenseCog(commands.Cog):
                 res_str += f"\n  - ℹ️ 無其他伺服器需執行封鎖 (或開啟聯防之伺服器已全數封鎖)"
             if failed_guilds:
                 res_str += f"\n  - ❌ 封鎖失敗 ({len(failed_guilds)} 個伺服器): {', '.join(failed_guilds)}"
+            if db_added:
+                res_str += "\n  - 🛡️ 已寫入 bad_users 惡意帳號庫"
+            elif banned_guilds:
+                res_str += "\n  - ⚠️ 封鎖已成功，但寫入 bad_users 惡意帳號庫失敗"
+            else:
+                res_str += "\n  - ℹ️ 未有任何封鎖成功，因此未寫入惡意帳號庫"
             results.append(res_str)
 
         embed_resp = discord.Embed(
@@ -1147,7 +1201,7 @@ class RykerDefenseCog(commands.Cog):
             description="\n\n".join(results),
             color=discord.Color.red()
         )
-        embed_resp.set_footer(text="已同步寫入 bad_users 惡意帳號庫，並剝奪所有歷史畢業紀錄。")
+        embed_resp.set_footer(text="僅會將實際封鎖成功的帳號寫入 bad_users，並剝奪其歷史畢業紀錄。")
         await interaction.followup.send(embed=embed_resp, ephemeral=True)
 
     @commands.Cog.listener()
