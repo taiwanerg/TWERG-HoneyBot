@@ -1,8 +1,8 @@
 import datetime
 import difflib
+import re
 import discord
 from ryker_keywords import (
-    BAD_WORDS,
     REGEX_PATTERNS,
     NICKNAME_EXCLUDED_WORDS,
     EXEMPTED_INTERJECTIONS
@@ -36,7 +36,7 @@ def normalize_text(text: str) -> str:
 async def check_bad_words(cog, message: discord.Message) -> bool:
     """
     敏感詞彙與組合正則特徵比對 (bad_words / REGEX_PATTERNS)
-    比對範圍：靜態 BAD_WORDS + 動態自訂詞庫 (custom_bad_words DB)
+    比對範圍：DB 全域及伺服器詞庫 + REGEX_PATTERNS
     匹配成功時刪除訊息並執行 3 天禁言處決。
     回傳 True 表示已有處置，跳過後續檢查。
     """
@@ -45,9 +45,8 @@ async def check_bad_words(cog, message: discord.Message) -> bool:
     raw_content = message.content or ""
     norm_content = normalize_text(raw_content)
 
-    # 合併靜態底層詞庫 + 動態自訂詞庫（GLOBAL + 本伺服器）
-    dynamic_words = get_custom_bad_words(str(message.guild.id))
-    all_words = list(BAD_WORDS) + dynamic_words
+    # 預設詞僅於首次初始化匯入 DB，刪除後不再從程式碼補回。
+    all_words = get_custom_bad_words(str(message.guild.id))
 
     # 1. 關鍵字比對 (all_words)
     matched_word = None
@@ -60,8 +59,8 @@ async def check_bad_words(cog, message: discord.Message) -> bool:
     matched_regex = None
     if not matched_word:
         for pattern in REGEX_PATTERNS:
-            if pattern.search(raw_content) or pattern.search(norm_content):
-                matched_regex = pattern.pattern
+            if re.search(pattern, raw_content) or re.search(pattern, norm_content):
+                matched_regex = pattern
                 break
 
     if matched_word or matched_regex:

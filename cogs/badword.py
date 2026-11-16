@@ -63,7 +63,7 @@ class BadWordCog(commands.Cog):
             words = list_custom_bad_words_detail(str(interaction.guild_id))
             if not words:
                 await interaction.response.send_message(
-                    "📋 目前尚未新增任何自訂敏感詞。\n（靜態底層詞庫不在此列出，請查閱 `ryker_keywords.py`）",
+                    "📋 目前全域及本伺服器詞庫皆無敏感詞。",
                     ephemeral=True
                 )
                 return
@@ -71,30 +71,33 @@ class BadWordCog(commands.Cog):
             global_words = [w for w in words if w["scope"] == "全域"]
             server_words = [w for w in words if w["scope"] == "本伺服器"]
 
-            embed = discord.Embed(
-                title="📋 自訂敏感詞庫列表",
-                color=discord.Color.blurple(),
-                timestamp=datetime.datetime.utcnow()
-            )
-            embed.set_footer(text="靜態底層詞庫（ryker_keywords.py）的詞彙不在此顯示")
+            embeds = []
+            for scope, entries in (("全域", global_words), ("本伺服器", server_words)):
+                if not entries:
+                    continue
+                pages = []
+                page = ""
+                for entry in entries:
+                    line = f"`{entry['word']}` — 由 {entry['added_by']}\n"
+                    if len(page) + len(line) > 3500:
+                        pages.append(page)
+                        page = ""
+                    page += line
+                if page:
+                    pages.append(page)
+                for index, description in enumerate(pages, 1):
+                    embed = discord.Embed(
+                        title=f"📋 {scope}敏感詞庫（{len(entries)} 筆）— {index}/{len(pages)}",
+                        description=description,
+                        color=discord.Color.blurple(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    embed.set_footer(text="預設詞已納入全域詞庫；正則特徵規則仍由程式碼管理")
+                    embeds.append(embed)
 
-            if global_words:
-                lines = [f"`{w['word']}` — 由 {w['added_by']}" for w in global_words]
-                embed.add_field(
-                    name=f"全域詞彙（{len(global_words)} 筆）",
-                    value="\n".join(lines) or "（無）",
-                    inline=False
-                )
-
-            if server_words:
-                lines = [f"`{w['word']}` — 由 {w['added_by']}" for w in server_words]
-                embed.add_field(
-                    name=f"本伺服器詞彙（{len(server_words)} 筆）",
-                    value="\n".join(lines) or "（無）",
-                    inline=False
-                )
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embeds[0], ephemeral=True)
+            for embed in embeds[1:]:
+                await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         # 3. 其他操作需要詞彙參數

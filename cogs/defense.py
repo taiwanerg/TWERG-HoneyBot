@@ -8,8 +8,6 @@ import re
 import difflib
 import datetime
 from ryker_keywords import (
-    BAD_WORDS, 
-    REGEX_PATTERNS, 
     NICKNAME_EXCLUDED_WORDS, 
     EXEMPTED_INTERJECTIONS, 
     TARGET_USERS,

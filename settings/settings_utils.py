@@ -2,6 +2,10 @@ import discord
 import json
 import os
 import sqlite3
+from contextlib import closing
+import time
+
+from ryker_keywords import BAD_WORDS
 
 DB_GUILD_SETTINGS = 'guild_settings.db'
 DB_SERVER_AUTHS = 'server_authorizations.db'
@@ -48,9 +52,11 @@ def _init_all_settings_dbs():
     """初始化 guild_settings.db 與 server_authorizations.db 並遷移舊版 JSON 資料"""
     try:
         # 1. 初始化 guild_settings.db
-        with sqlite3.connect(DB_GUILD_SETTINGS) as conn:
+        with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL;")
+            # 將種子資料與完成標記放在同一交易，避免中斷或同時初始化造成重複匯入。
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS guild_settings (
                     guild_id TEXT PRIMARY KEY,
@@ -80,10 +86,28 @@ def _init_all_settings_dbs():
                     UNIQUE(guild_id, word)
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings_migrations (
+                    name TEXT PRIMARY KEY
+                )
+            """)
+            cursor.execute(
+                "INSERT INTO settings_migrations (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+                ("default_global_bad_words",)
+            )
+            if cursor.rowcount:
+                # 即使之後全域詞庫被清空，也不可再次補回預設詞。
+                added_at = time.time()
+                cursor.executemany(
+                    """INSERT INTO custom_bad_words (guild_id, word, added_by, added_at)
+                       VALUES ('GLOBAL', ?, ?, ?)
+                       ON CONFLICT(guild_id, word) DO NOTHING""",
+                    [(word, "系統預設", added_at) for word in BAD_WORDS]
+                )
             conn.commit()
 
         # 2. 初始化 server_authorizations.db
-        with sqlite3.connect(DB_SERVER_AUTHS) as conn:
+        with closing(sqlite3.connect(DB_SERVER_AUTHS)) as conn, conn:
             conn.cursor().execute("PRAGMA journal_mode=WAL;")
             conn.cursor().execute("""
                 CREATE TABLE IF NOT EXISTS server_authorizations (
@@ -394,10 +418,9 @@ def add_custom_bad_word(guild_id: str, word: str, added_by: str) -> bool:
     guild_id 可為專屬伺服器 ID 字串，或 "GLOBAL" 代表全域有效。
     回傳 True 表示新增成功，False 表示詞彙已存在。
     """
-    import time
     _init_all_settings_dbs()
     try:
-        with sqlite3.connect(DB_GUILD_SETTINGS) as conn:
+        with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
             conn.cursor().execute(
                 "INSERT INTO custom_bad_words (guild_id, word, added_by, added_at) VALUES (?, ?, ?, ?)",
                 (str(guild_id), word.strip(), added_by, time.time())
@@ -417,7 +440,7 @@ def remove_custom_bad_word(guild_id: str, word: str) -> bool:
     """
     _init_all_settings_dbs()
     try:
-        with sqlite3.connect(DB_GUILD_SETTINGS) as conn:
+        with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM custom_bad_words WHERE guild_id = ? AND word = ?",
@@ -436,7 +459,7 @@ def get_custom_bad_words(guild_id: str) -> list[str]:
     """
     _init_all_settings_dbs()
     try:
-        with sqlite3.connect(DB_GUILD_SETTINGS) as conn:
+        with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT word FROM custom_bad_words WHERE guild_id IN ('GLOBAL', ?) ORDER BY added_at",
@@ -454,7 +477,7 @@ def list_custom_bad_words_detail(guild_id: str) -> list[dict]:
     """
     _init_all_settings_dbs()
     try:
-        with sqlite3.connect(DB_GUILD_SETTINGS) as conn:
+        with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute(
                 """

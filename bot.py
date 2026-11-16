@@ -103,6 +103,9 @@ async def main():
     if not token:
         sys.exit("❌ 錯誤：找不到有效的 Discord Bot Token！請在 config.json 設定 'TOKEN' 或切分設定 'TOKEN_PART1' + 'TOKEN_PART2'。")
 
+    from settings.settings_utils import _init_all_settings_dbs
+    _init_all_settings_dbs()
+
     async with bot:
         await load_extensions()
         await bot.start(token)
