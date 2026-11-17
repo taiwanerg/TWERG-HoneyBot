@@ -4,8 +4,9 @@ import os
 import sqlite3
 from contextlib import closing
 import time
+import re
 
-from ryker_keywords import BAD_WORDS
+from ryker_keywords import BAD_WORDS, REGEX_PATTERNS
 
 DB_GUILD_SETTINGS = 'guild_settings.db'
 DB_SERVER_AUTHS = 'server_authorizations.db'
@@ -104,6 +105,51 @@ def _init_all_settings_dbs():
                        ON CONFLICT(guild_id, word) DO NOTHING""",
                     [(word, "系統預設", added_at) for word in BAD_WORDS]
                 )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS custom_regex_patterns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    added_by TEXT NOT NULL,
+                    added_at REAL NOT NULL,
+                    UNIQUE(guild_id, pattern)
+                )
+            """)
+            cursor.execute(
+                "INSERT INTO settings_migrations (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+                ("default_global_regex_patterns",)
+            )
+            if cursor.rowcount:
+                added_at = time.time()
+                for pattern in REGEX_PATTERNS:
+                    re.compile(pattern)
+                    cursor.execute(
+                        """INSERT INTO custom_regex_patterns (guild_id, pattern, added_by, added_at)
+                           VALUES ('GLOBAL', ?, ?, ?) ON CONFLICT(guild_id, pattern) DO NOTHING""",
+                        (pattern, "系統預設", added_at)
+                    )
+            cursor.execute(
+                "INSERT INTO settings_migrations (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+                ("remove_numeric_bad_words",)
+            )
+            if cursor.rowcount:
+                # 一次性清理所有範圍；不在每次啟動覆寫管理員後續的設定。
+                for row_id, word in cursor.execute("SELECT id, word FROM custom_bad_words").fetchall():
+                    if word.strip().isdecimal():
+                        cursor.execute("DELETE FROM custom_bad_words WHERE id = ?", (row_id,))
+                for row_id, pattern in cursor.execute("SELECT id, pattern FROM custom_regex_patterns").fetchall():
+                    if pattern.strip().isdecimal():
+                        cursor.execute("DELETE FROM custom_regex_patterns WHERE id = ?", (row_id,))
+                    elif pattern == r'78(毛)?|拎(北|爸)':
+                        # 僅修正仍存在的舊規則，不補回已刪除的規則。
+                        cursor.execute(
+                            "UPDATE OR IGNORE custom_regex_patterns SET pattern = ? WHERE id = ?",
+                            (r'78毛|拎(北|爸)', row_id)
+                        )
+                        cursor.execute(
+                            "DELETE FROM custom_regex_patterns WHERE id = ? AND pattern = ?",
+                            (row_id, pattern)
+                        )
             conn.commit()
 
         # 2. 初始化 server_authorizations.db
@@ -496,6 +542,51 @@ def list_custom_bad_words_detail(guild_id: str) -> list[dict]:
     except Exception as e:
         print(f"⚠️ [custom_bad_words] 讀取詳細列表失敗: {e}")
         return []
+
+def add_custom_regex_pattern(guild_id: str, pattern: str, added_by: str) -> bool:
+    """驗證後新增正則；保留原始空白與反斜線，重複時回傳 False。"""
+    if not pattern or len(pattern) > 1000:
+        raise ValueError("正則規則長度必須為 1–1000 字元。")
+    re.compile(pattern)
+    _init_all_settings_dbs()
+    with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
+        cursor = conn.execute(
+            """INSERT INTO custom_regex_patterns (guild_id, pattern, added_by, added_at)
+               VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, pattern) DO NOTHING""",
+            (str(guild_id), pattern, added_by, time.time())
+        )
+        return cursor.rowcount > 0
+
+
+def remove_custom_regex_pattern(guild_id: str, pattern: str) -> bool:
+    _init_all_settings_dbs()
+    with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn, conn:
+        cursor = conn.execute(
+            "DELETE FROM custom_regex_patterns WHERE guild_id = ? AND pattern = ?",
+            (str(guild_id), pattern)
+        )
+        return cursor.rowcount > 0
+
+
+def list_custom_regex_patterns_detail(guild_id: str) -> list[dict]:
+    _init_all_settings_dbs()
+    with closing(sqlite3.connect(DB_GUILD_SETTINGS)) as conn:
+        rows = conn.execute(
+            """SELECT pattern, guild_id, added_by, added_at FROM custom_regex_patterns
+               WHERE guild_id IN ('GLOBAL', ?) ORDER BY guild_id, id""",
+            (str(guild_id),)
+        ).fetchall()
+    return [
+        {"pattern": row[0], "scope": "全域" if row[1] == "GLOBAL" else "本伺服器",
+         "added_by": row[2], "added_at": row[3]}
+        for row in rows
+    ]
+
+
+def get_custom_regex_patterns(guild_id: str) -> list[str]:
+    """執行時僅讀取 DB，不以 Python 預設清單作為備援。"""
+    return [entry["pattern"] for entry in list_custom_regex_patterns_detail(guild_id)]
+
 
 async def setup(bot):
     pass

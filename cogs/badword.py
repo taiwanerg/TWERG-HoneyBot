@@ -2,12 +2,17 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import datetime
+import re
+import sqlite3
 from cogs.owner import is_user_trusted
 from cogs.server_check import is_server_authorized
 from settings.settings_utils import (
     add_custom_bad_word,
     remove_custom_bad_word,
     list_custom_bad_words_detail,
+    add_custom_regex_pattern,
+    remove_custom_regex_pattern,
+    list_custom_regex_patterns_detail,
 )
 
 # -------------------------------------------------------
@@ -92,7 +97,7 @@ class BadWordCog(commands.Cog):
                         color=discord.Color.blurple(),
                         timestamp=discord.utils.utcnow()
                     )
-                    embed.set_footer(text="預設詞已納入全域詞庫；正則特徵規則仍由程式碼管理")
+                    embed.set_footer(text="敏感詞與正則皆由 DB 管理；正則請使用 /正則")
                     embeds.append(embed)
 
             await interaction.response.send_message(embed=embeds[0], ephemeral=True)
@@ -199,6 +204,86 @@ class BadWordCog(commands.Cog):
                     color=discord.Color.red()
                 )
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="正則", description="[管理員/信任者] 管理 DB 正則規則，修改即時生效")
+    @app_commands.describe(
+        操作="新增、移除、列表或全域管理",
+        規則="原始正則表達式，不需加 Python 的 r 前綴或外層引號；移除時需完全相同"
+    )
+    @app_commands.choices(操作=[
+        app_commands.Choice(name="➕ 新增 (本伺服器)", value="add"),
+        app_commands.Choice(name="➖ 移除 (本伺服器)", value="remove"),
+        app_commands.Choice(name="📋 列表 (全域及本伺服器)", value="list"),
+        app_commands.Choice(name="🌐 新增全域 (信任者 / 擁有者)", value="add_global"),
+        app_commands.Choice(name="🗑️ 移除全域 (信任者 / 擁有者)", value="remove_global"),
+    ])
+    async def regex_command(
+        self, interaction: discord.Interaction,
+        操作: app_commands.Choice[str], 規則: str = None
+    ):
+        if not is_server_authorized(interaction.guild_id):
+            await interaction.response.send_message("❌ 此伺服器尚未獲得機器人授權。", ephemeral=True)
+            return
+        is_admin = isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator
+        is_trusted = is_user_trusted(interaction.user.id)
+        if not (is_admin or is_trusted):
+            await interaction.response.send_message("❌ 需要伺服器管理員或機器人信任者權限。", ephemeral=True)
+            return
+        action = 操作.value
+        if action.endswith("_global") and not is_trusted:
+            await interaction.response.send_message("❌ 全域操作僅限機器人信任者或擁有者。", ephemeral=True)
+            return
+
+        try:
+            if action == "list":
+                entries = list_custom_regex_patterns_detail(str(interaction.guild_id))
+                if not entries:
+                    await interaction.response.send_message("📋 全域及本伺服器皆無正則規則。", ephemeral=True)
+                    return
+                # 跳脫 Markdown 以顯示原始規則；分頁避免超過 Discord 限制。
+                pages, page = [], ""
+                for entry in entries:
+                    line = f"【{entry['scope']}】{discord.utils.escape_markdown(entry['pattern'])} — 由 {discord.utils.escape_markdown(entry['added_by'])}\n"
+                    while line:
+                        chunk, line = line[:3500], line[3500:]
+                        if len(page) + len(chunk) > 3500:
+                            pages.append(page)
+                            page = ""
+                        page += chunk
+                if page:
+                    pages.append(page)
+                for index, description in enumerate(pages):
+                    embed = discord.Embed(
+                        title=f"📋 正則規則（{len(entries)} 筆）— {index + 1}/{len(pages)}",
+                        description=description, color=discord.Color.blurple()
+                    )
+                    embed.set_footer(text="輸入原始正則，不含 Python r 前綴或外層引號；移除全域需信任者權限")
+                    send = interaction.response.send_message if index == 0 else interaction.followup.send
+                    await send(embed=embed, ephemeral=True)
+                return
+
+            if 規則 is None or not 規則 or len(規則) > 1000:
+                await interaction.response.send_message("❌ 請填寫 1–1000 字元的原始正則規則。", ephemeral=True)
+                return
+            scope = "GLOBAL" if action.endswith("_global") else str(interaction.guild_id)
+            scope_label = "全域" if scope == "GLOBAL" else "本伺服器"
+            if action in ("add", "add_global"):
+                success = add_custom_regex_pattern(
+                    scope, 規則, f"{interaction.user.display_name} ({interaction.user.id})"
+                )
+                result = "新增成功，即時生效" if success else "已存在"
+            elif action in ("remove", "remove_global"):
+                success = remove_custom_regex_pattern(scope, 規則)
+                result = "移除成功，即時生效" if success else "不存在（請確認範圍及原始規則完全相同）"
+            else:
+                await interaction.response.send_message("❌ 不支援的操作。", ephemeral=True)
+                return
+            await interaction.response.send_message(f"{scope_label}正則規則：{result}。", ephemeral=True)
+        except (re.error, ValueError) as exc:
+            await interaction.response.send_message(f"❌ 正則規則無效：{exc}", ephemeral=True)
+        except sqlite3.Error:
+            await interaction.response.send_message("❌ 資料庫操作失敗，請查看機器人日誌。", ephemeral=True)
+            raise
 
 
 async def setup(bot: commands.Bot):

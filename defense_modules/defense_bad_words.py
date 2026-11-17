@@ -1,12 +1,22 @@
 import datetime
-import difflib
 import re
 import discord
-from ryker_keywords import (
-    REGEX_PATTERNS,
-    NICKNAME_EXCLUDED_WORDS,
-    EXEMPTED_INTERJECTIONS
+
+# 自訂表情的名稱、snowflake ID 都不是使用者輸入的文字。
+CUSTOM_EMOJI_PATTERN = re.compile(r'<a?:[a-zA-Z0-9_]+:[0-9]+>')
+UNICODE_EMOJI_PATTERN = re.compile(
+    r'[0-9#*]\ufe0f?\u20e3'  # 鍵帽表情：整組排除，避免留下數字
+    r'|[\U0001f000-\U0001faff\u2600-\u27bf'
+    r'\u2300-\u23ff\u2b05-\u2b07\u2b1b\u2b1c\u2b50\u2b55'
+    r'\u2194-\u2199\u21a9\u21aa\u2934\u2935'
+    r'\u00a9\u00ae\u203c\u2049\u2122\u2139\u24c2'
+    r'\u3030\u303d\u3297\u3299\ufe0e\ufe0f\u200d'
+    r'\U000e0020-\U000e007f]'
 )
+
+def text_without_emojis(text: str) -> str:
+    """僅供敏感詞比對使用；以空白隔開表情前後文字，避免拼出新詞。"""
+    return UNICODE_EMOJI_PATTERN.sub(' ', CUSTOM_EMOJI_PATTERN.sub(' ', text))
 
 def normalize_text(text: str) -> str:
     """歸一化文字：全角轉半角、大寫轉小寫、繁體轉簡體並剔除雜訊"""
@@ -35,15 +45,16 @@ def normalize_text(text: str) -> str:
 
 async def check_bad_words(cog, message: discord.Message) -> bool:
     """
-    敏感詞彙與組合正則特徵比對 (bad_words / REGEX_PATTERNS)
-    比對範圍：DB 全域及伺服器詞庫 + REGEX_PATTERNS
+    敏感詞彙與組合正則特徵比對。
+    比對範圍：DB 全域及伺服器敏感詞與正則規則。
     匹配成功時刪除訊息並執行 3 天禁言處決。
     回傳 True 表示已有處置，跳過後續檢查。
     """
-    from settings.settings_utils import get_custom_bad_words
+    from settings.settings_utils import get_custom_bad_words, get_custom_regex_patterns
 
     raw_content = message.content or ""
-    norm_content = normalize_text(raw_content)
+    match_content = text_without_emojis(raw_content)
+    norm_content = normalize_text(match_content)
 
     # 預設詞僅於首次初始化匯入 DB，刪除後不再從程式碼補回。
     all_words = get_custom_bad_words(str(message.guild.id))
@@ -51,15 +62,20 @@ async def check_bad_words(cog, message: discord.Message) -> bool:
     # 1. 關鍵字比對 (all_words)
     matched_word = None
     for bw in all_words:
-        if bw in raw_content or bw in norm_content:
+        if bw in match_content or bw in norm_content:
             matched_word = bw
             break
 
-    # 2. 組合式正則比對 (REGEX_PATTERNS)
+    # 2. 組合式正則比對：僅使用 DB 規則。
     matched_regex = None
     if not matched_word:
-        for pattern in REGEX_PATTERNS:
-            if re.search(pattern, raw_content) or re.search(pattern, norm_content):
+        for pattern in get_custom_regex_patterns(str(message.guild.id)):
+            try:
+                matched = re.search(pattern, match_content) or re.search(pattern, norm_content)
+            except re.error as exc:
+                print(f"⚠️ [敏感詞模組] 跳過無效 DB 正則 {pattern!r}: {exc}")
+                continue
+            if matched:
                 matched_regex = pattern
                 break
 
